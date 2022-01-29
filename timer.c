@@ -1,91 +1,35 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
-#include <sys/select.h>
-#include <ncurses.h>
+#include <pthread.h>
 
-#define BOX_WIDTH 20
-#define BOX_HEIGHT 5
-
-#define BOX_OFFSETX (COLS - BOX_WIDTH) / 2
-#define BOX_OFFSETY (LINES - BOX_HEIGHT) / 2
-
-#define TEXT_OFFSETX (COLS/2-BOX_WIDTH/4) + 1
-#define TEXT_OFFSETY LINES/2
-
-WINDOW *timerWindow;
-
-void initNcurses(void);
-void drawBox(WINDOW *window);
 void displayTime(int h, int m, int s);
-int fdMonitor(void);
-void pauseTimer(void);
+void *stopTimer();
 int timer(int h, int m, int s);
 
-void initNcurses(void) {
-    initscr();
-    cbreak();
-    noecho();
-    curs_set(0);
-    refresh();
-
-    //drawBox(timerWindow);
-}
-
-void drawBox(WINDOW *window) {
-    window = newwin(BOX_HEIGHT, BOX_WIDTH, BOX_OFFSETY, BOX_OFFSETX);
-
-    box(window, 0 , 0);
-
-    wrefresh(window);
-    refresh();
-}
+pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+int stop = 0;
 
 void displayTime(int h, int m, int s) {
-    mvprintw(TEXT_OFFSETY, TEXT_OFFSETX, "%d:%02d:%02d\n", h,m,s);
-    //drawBox(timerWindow);
-    refresh();
-}
-
-// TODO: only pause on certain keys
-int fdMonitor(void) {
-    int fd, sret;
-    fd = 0;
-
-    fd_set readfds;
-    struct timeval timeout;
-
-    FD_ZERO(&readfds);
-    FD_SET(fd, &readfds);
-
-    timeout.tv_sec = 1;
-    timeout.tv_usec = 0;
-
-    return sret = select(8, &readfds, NULL, NULL, &timeout);
-}
-
-// TODO: find a better way to pause and unpause this
-void pauseTimer(void) {
-    while (1) {
-        if (getchar() == 'p') {
-            break;
-        }
-    }
+    printf("%1d:%1d:%1d\n", h, m, s);
 }
 
 int timer(int h, int m, int s) {
-    int sret = 0;
     displayTime(h,m,s);
 
     while (h >= 0) {
         while (m >= 0) {
             while (s >= 0) {
-                sret = fdMonitor();
-                if (sret == 0) {
-                    displayTime(h,m,s);
-                } else {
-                    pauseTimer();
+                // pause listens to shared variable from another thread
+                pthread_mutex_lock(&lock);
+                if (stop) {
+                    pthread_cond_wait(&cond, &lock);
                 }
+                pthread_mutex_unlock(&lock);
+
+                displayTime(h,m,s);
+                sleep(1);
                 s--;
             }
             s = 59;
@@ -93,6 +37,25 @@ int timer(int h, int m, int s) {
         }
         m = 59;
         h--;
+    }
+    return 0;
+}
+
+void *stopTimer() {
+    while (1) {
+        if(getchar() == '\n') {
+            pthread_mutex_lock(&lock);
+
+            if (stop) {
+                stop = 0;
+            } else {
+                stop = 1;
+                printf("Paused\n");
+            }
+
+            pthread_mutex_unlock(&lock);
+            pthread_cond_signal(&cond);
+        }
     }
     return 0;
 }
@@ -111,12 +74,12 @@ int main(int argc, char **argv) {
             return 1;
         }
 
-        initNcurses();
+        pthread_t t1;
+        pthread_create(&t1, NULL, &stopTimer, NULL);
+
         timer(h,m,s);
-        endwin();
 
         return 0;
-
     }
 
     printf("Too few arguments\nExpected: hours:minutes:seconds\n");
